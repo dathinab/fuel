@@ -41,15 +41,23 @@ The following configurations are supported:
    of paths separated by an os-specific delimiter (':' for Linux and
    OSX, ';' for Windows).
 
+.. option:: default_seed
 
-.. todo::
-
-   Implement this.
+    the default rng seed used by some randomness including schemes, converters etc.
 
 .. option:: floatX
 
    The default :class:`~numpy.dtype` to use for floating point numbers. The
-   default value is ``float64``. A lower value can save memory.
+   default value is ``float64``. A lower value can save memory, and speed
+   up/enable computations on a GPU. Note that if ``fuel_uses_theano`` is set
+   it will import theano and use ``theano.config.floatX`` as default value insted
+   of ``float64``
+
+.. option:: fuel_uses_theano
+
+    Specifies if fuel is allowed to/should use theano. Defaults to True. If this
+    value is set theano will be imported and it will use the theanos config for
+    finding a default for floatX. Other use cases might be possible, too.
 
 .. option:: extra_downloaders
 
@@ -70,9 +78,11 @@ The following configurations are supported:
 """
 import logging
 import os
+import sys
 
 import six
 import yaml
+import functools
 
 from .exceptions import ConfigurationError
 
@@ -186,6 +196,38 @@ class Configuration(object):
         if default is not NOT_SET:
             self.config[key]['default'] = default
 
+
+def _human_bool(value, default):
+    """casts to bool, interpreting strings semantically instead of length based
+
+    String interpretations
+    ----------------------
+    - true    is 'True', '1' or 'true'
+    - false   is 'False', '0' or 'false'
+    - default is ''
+
+    Other types
+    -----------
+    return bool(value)
+
+    :param value: the value to interprete as bool
+    :param default: the default value used for empty strings
+    :return: a boolean interpretation of the value
+    :raises ValueError: if the value is a string and '' or a boolean description like 'True'/'False'
+    """
+
+    if isinstance(value, str):
+        if len(value) == 0:
+            return default
+        if value == "1" or value == "True" or value == "true":
+            return True
+        elif value == "0" or value == "False" or value == "false":
+            return False
+        else:
+            raise ValueError("string will not be interpreted as bool use 'True'/'False' instead")
+    return bool(value)
+
+
 config = Configuration()
 
 # Define configuration options
@@ -197,13 +239,17 @@ config.add_config('extra_downloaders', type_=extra_downloader_converter,
 config.add_config('extra_converters', type_=extra_downloader_converter,
                   default=[], env_var='FUEL_EXTRA_CONVERTERS')
 
-# Default to Theano's floatX if possible
-try:
-    from theano import config as theano_config
-    default_floatX = theano_config.floatX
-except Exception:
-    default_floatX = 'float64'
-config.add_config('floatX', type_=str, env_var='FUEL_FLOATX',
-                  default=default_floatX)
+# the default of floatX might be overriden if `fuel_uses_theano` is Tru(ly) AFTER user configs are loaded
+config.add_config('floatX', type_=str, env_var='FUEL_FLOATX', default='float64')
+# not that you have to set fuel_uses_theano=False if theano might not be available
+config.add_config('fuel_uses_theano', type_=functools.partial(_human_bool, default=True), env_var='FUEL_USES_THEANO',
+                  default=True)
 
 config.load_yaml()
+
+# under some cicumstances wen want to use the thano floatX config as default
+# but we NEVER want to load theano unconditionally as it will bind/initialize the GPU, CUDA etc.
+if config.fuel_uses_theano:
+    from theano import config as theano_config
+    # override the default, not the user configuration
+    config.config['floatX']['default'] = theano_config.floatX
